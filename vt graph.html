@@ -1,0 +1,1355 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Elite RC Telemetry 5.3 - Optimized</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="icon" type="image/x-icon" href="vtgraphico.ico">
+    <style>
+        /* --- Core Styles & High-Contrast Graph Colors --- */
+        :root {
+            --color-velocity: #16A34A;      /* Green */
+            --color-accel: #F97316;         /* Orange */
+            --color-distance: #2563EB;      /* Blue */
+            --color-gforce: #D946EF;        /* Fuchsia */
+            --color-displacement: #6366F1;  /* Indigo */
+            --color-jerk: #EC4899;          /* Pink */
+        }
+        html { scroll-behavior: smooth; }
+        body {
+            background-color: #020617;
+            font-family: 'Inter', 'Segoe UI', sans-serif;
+            background-image:
+                radial-gradient(at 27% 37%, hsla(215, 98%, 61%, 0.1) 0px, transparent 50%),
+                radial-gradient(at 97% 21%, hsla(125, 98%, 72%, 0.1) 0px, transparent 50%),
+                radial-gradient(at 52% 99%, hsla(355, 98%, 61%, 0.1) 0px, transparent 50%),
+                radial-gradient(at 1% 1%, hsla(240, 100%, 70%, 0.05) 0px, transparent 25%);
+            transition: background-color 0.3s ease-in-out;
+        }
+        .light body { background-color: #f1f5f9; background-image: none; }
+
+        /* --- Components & Effects --- */
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.4);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: background-color 0.3s, border-color 0.3s, box-shadow 0.3s, padding 0.3s ease;
+        }
+        .light .glass-panel {
+            background: rgba(255, 255, 255, 0.8);
+            border-color: #e2e8f0;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+        }
+        .panel-title {
+             @apply text-base font-semibold text-slate-300 light:text-slate-700 pb-3 mb-4 border-b border-white/10 light:border-black/10;
+        }
+        .btn { 
+            @apply transition-all duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900 light:focus:ring-offset-slate-100;
+        }
+        .btn:hover:not(:disabled) { @apply -translate-y-0.5 shadow-lg; }
+        .btn:active:not(:disabled) { @apply translate-y-0 scale-[0.98]; }
+        .btn:disabled { @apply opacity-50 cursor-not-allowed; }
+        .gauge-indicator { transition: all 0.1s linear; }
+
+        /* --- Animations --- */
+        @keyframes fade-in-up { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in-up { animation: fade-in-up 0.6s ease-out forwards; }
+        @keyframes pulse-highlight { 0%, 100% { background-color: rgba(234, 179, 8, 0.1); } 50% { background-color: rgba(234, 179, 8, 0.3); } }
+        .is-highlighted { animation: pulse-highlight 1.5s ease-out; }
+        @keyframes slide-in-bottom { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .animate-slide-in-bottom { animation: slide-in-bottom 0.5s cubic-bezier(0.25, 1, 0.5, 1) forwards; }
+        @keyframes blink { 50% { background-color: rgba(255, 165, 0, 0.1); filter: drop-shadow(0 0 1px transparent); } }
+        .blinking { animation: blink 0.8s infinite; background-color: rgba(255, 165, 0, 1) !important; filter: drop-shadow(0 0 10px #ffa500) !important; }
+
+        /* --- Game Preview & Touch Controls --- */
+        #demo-game-container { position: relative; aspect-ratio: 16 / 9; background-color: #0b081d; border-radius: 0.75rem; overflow: hidden; touch-action: none; }
+        .light #demo-game-container { background-color: #e0e7ff; }
+        #particleCanvas { position: absolute; top: 0; left: 0; z-index: 1; width: 100%; height: 100%; pointer-events: none; }
+        #road-markings { position: absolute; top: 50%; left: 0; width: 100%; height: 4px; transform: translateY(-50%); background: repeating-linear-gradient(to right, #00b4d8, #00b4d8 20px, transparent 20px, transparent 80px); opacity: 0.2; }
+        #car { position: absolute; width: 50px; height: 100px; z-index: 10; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+        #joystick-container { position: absolute; bottom: 1rem; left: 1rem; z-index: 20; }
+        #joystick-base { width: 100px; height: 100px; background: rgba(255, 255, 255, 0.1); border-radius: 50%; display: flex; justify-content: center; align-items: center; }
+        #joystick-stick { width: 50px; height: 50px; background: rgba(255, 255, 255, 0.3); border-radius: 50%; transition: transform 0.05s linear; }
+        
+        /* --- Custom Toggles --- */
+        .graph-toggle input:checked ~ .dot { transform: translateX(100%); }
+        .graph-toggle input:checked ~ .bg-slate-700 { background-color: var(--toggle-color, #38bdf8); }
+        
+        /* --- Full-Screen Graph Mode --- */
+        body.graph-fullscreen-active { overflow: hidden; }
+        body.graph-fullscreen-active > main > header,
+        body.graph-fullscreen-active > main > footer,
+        body.graph-fullscreen-active #sidebar-column { display: none; }
+        body.graph-fullscreen-active #graph-column { width: 100%; grid-column: span 1 / span 1; }
+        #graph-panel.is-fullscreen {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 100; padding: 0.5rem; border-radius: 0; height: 100vh !important;
+        }
+        #graph-panel.is-fullscreen #graph-title-bar {
+            position: absolute; top: 0.5rem; right: 0.5rem;
+            z-index: 10; margin-bottom: 0; justify-content: flex-end;
+        }
+        #graph-panel.is-fullscreen #graph-title,
+        #graph-panel.is-fullscreen #export-buttons-container,
+        #graph-panel.is-fullscreen #graph-toggles { display: none; }
+        
+
+        /* --- RESPONSIVE DESIGN (Mobile First) --- */
+        /* Base styles for mobile */
+        h1 { font-size: 1.5rem; }
+        #current-speed { font-size: 4rem; }
+        .glass-panel { padding: 1rem; }
+        #main-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1.5rem;
+        }
+        #graph-column { min-height: 400px; }
+        #demo-game-panel { order: -2; } /* Demo on top */
+        #graph-column { order: -1; } /* Graph second */
+
+        /* Tablet Styles */
+        @media (min-width: 768px) {
+            h1 { font-size: 1.875rem; }
+            #current-speed { font-size: 5rem; }
+            .glass-panel { padding: 1.5rem; }
+             #car { width: 65px; height: 130px; }
+        }
+
+        /* Desktop Styles */
+        @media (min-width: 1280px) {
+            #main-grid {
+                grid-template-columns: 1fr 3fr; /* 1/4 sidebar, 3/4 main content */
+            }
+            #sidebar-column { order: 1; }
+            #graph-column { order: 2; min-height: auto; }
+            #demo-game-panel { grid-column: span 1; } /* Take full width of its column */
+            #car { width: 80px; height: 160px; }
+        }
+    </style>
+</head>
+
+<body class="text-slate-200 light:text-slate-800 antialiased">
+
+    <!-- OVERLAYS & MODALS -->
+    <div id="loading-overlay" class="fixed inset-0 z-50 flex-col items-center justify-center bg-slate-900/80 backdrop-blur-sm hidden"><div class="text-blue-400 mb-4"><svg width="80" height="80" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><style>.spinner_V8m1{transform-origin:center;animation:spinner_zKoa 2s linear infinite}.spinner_V8m1 circle{stroke-linecap:round;animation:spinner_YpZS 1.5s ease-in-out infinite}@keyframes spinner_zKoa{100%{transform:rotate(360deg)}}@keyframes spinner_YpZS{0%{stroke-dasharray:0 150;stroke-dashoffset:0}47.5%{stroke-dasharray:42 150;stroke-dashoffset:-16}95%,100%{stroke-dasharray:42 150;stroke-dashoffset:-59}}</style><g class="spinner_V8m1"><circle cx="12" cy="12" r="9.5" fill="none" stroke-width="3"></circle></g></svg></div><p id="loading-message" class="text-white text-lg font-medium tracking-wider">Connecting...</p></div>
+    <div id="toast-container" class="fixed bottom-4 right-4 z-[101] flex flex-col gap-3"></div>
+    <div id="help-modal" class="fixed inset-0 z-40 bg-black/60 items-center justify-center hidden p-4" onclick="document.getElementById('help-modal').classList.add('hidden')"><div class="glass-panel rounded-2xl w-full max-w-2xl p-6 relative animate-fade-in-up" onclick="event.stopPropagation()"><button id="close-modal-btn" aria-label="Close help modal" class="absolute top-4 right-4 text-slate-400 hover:text-white light:hover:text-black transition"><svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg></button><h2 class="text-2xl font-bold mb-4 bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent light:from-blue-500 light:to-sky-500">Help & Troubleshooting</h2><div class="space-y-6 text-sm text-slate-300 light:text-slate-700 max-h-[70vh] overflow-y-auto pr-4"><div class="p-4 rounded-lg bg-slate-800/50 light:bg-slate-100"><h3 class="font-bold text-lg mb-2 text-white light:text-black">🚀 Pre-Flight Checklist</h3><ul class="list-disc list-inside space-y-1"><li>The RC car/device is powered on and running the correct firmware.</li><li>Your computer/phone has Bluetooth enabled.</li><li>You are using a compatible browser (e.g., Chrome, Edge).</li></ul></div><div><h3 class="font-bold text-lg mb-2 text-white light:text-black">📈 Viewing Graphs</h3><p>The graph starts in a 15-second live scrolling mode. During a session, use the <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline-block -mt-1" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M1 5.25A2.25 2.25 0 013.25 3h13.5A2.25 2.25 0 0119 5.25v9.5A2.25 2.25 0 0116.75 17H3.25A2.25 2.25 0 011 14.75v-9.5zm1.5 0v9.5c0 .138.112.25.25.25h13.5a.25.25 0 00.25-.25v-9.5a.25.25 0 00-.25-.25H3.25a.25.25 0 00-.25.25z" clip-rule="evenodd" /><path fill-rule="evenodd" d="M5 6a.5.5 0 01.5.5v2a.5.5 0 01-1 0v-2A.5.5 0 015 6zm2.5 0a.5.5 0 01.5.5v5a.5.5 0 01-1 0v-5a.5.5 0 01.5-.5zM10 6a.5.5 0 01.5.5v3a.5.5 0 01-1 0v-3a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0v-6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v1a.5.5 0 01-1 0v-1a.5.5 0 01.5-.5z" clip-rule="evenodd" /></svg> button to switch to a full view of all data collected so far. The graph will automatically show the full view when a session ends or is loaded from storage.</p></div><div><h3 class="font-bold text-lg mb-2 text-white light:text-black">🎮 Demo Mode</h3><p>Click 'Demo Mode' to activate the car simulator. On touch devices, a virtual joystick will appear for steering and acceleration. On desktop, use <kbd class="px-2 py-1.5 text-xs font-semibold text-gray-800 bg-gray-100 border border-gray-200 rounded-lg dark:bg-gray-600 dark:text-gray-100 dark:border-gray-500">WASD</kbd> or <kbd class="px-2 py-1.5 text-xs font-semibold text-gray-800 bg-gray-100 border border-gray-200 rounded-lg dark:bg-gray-600 dark:text-gray-100 dark:border-gray-500">Arrow Keys</kbd> to drive. Use <kbd class="px-2 py-1.5 text-xs font-semibold text-gray-800 bg-gray-100 border border-gray-200 rounded-lg dark:bg-gray-600 dark:text-gray-100 dark:border-gray-500">Q</kbd> / <kbd class="px-2 py-1.5 text-xs font-semibold text-gray-800 bg-gray-100 border border-gray-200 rounded-lg dark:bg-gray-600 dark:text-gray-100 dark:border-gray-500">E</kbd> for turn signals.</p></div><div><h3 class="font-bold text-lg mb-2 text-white light:text-black">💾 Saving & Loading Data</h3><p>Once a session has started, click the 'Save' button to store your telemetry data. Use the 'Load' button to open a list of saved sessions. You can review the full graph and stats from a past run or delete old data.</p></div><div><h3 class="font-bold text-lg mb-2 text-white light:text-black">🤔 Common Issues & Solutions</h3><div class="space-y-3"><p><strong>Issue: The device doesn't appear in the Bluetooth connection list.</strong><br><span class="text-slate-400 light:text-slate-600">Solution: Ensure the RC device has power and is nearby. Try refreshing the page.</span></p><p><strong>Issue: The connection fails after multiple attempts.</strong><br><span class="text-slate-400 light:text-slate-600">Solution: Try power cycling the RC device, then refresh this page and try connecting again.</span></p></div></div></div></div></div>
+    <div id="session-modal" class="fixed inset-0 z-40 bg-black/60 items-center justify-center hidden p-4" onclick="document.getElementById('session-modal').classList.add('hidden'); document.getElementById('session-modal').classList.remove('flex');"><div class="glass-panel rounded-2xl w-full max-w-2xl p-6 relative animate-fade-in-up" onclick="event.stopPropagation()"><button id="close-session-modal-btn" aria-label="Close session modal" class="absolute top-4 right-4 text-slate-400 hover:text-white light:hover:text-black transition"><svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg></button><h2 id="session-modal-title" class="text-2xl font-bold mb-4 bg-gradient-to-r from-green-400 to-sky-400 bg-clip-text text-transparent">Saved Sessions</h2><div id="save-session-view" class="hidden space-y-4"><p class="text-slate-300 light:text-slate-700">Enter a name for the current session to save it for later review.</p><div><label for="session-name-input" class="block mb-2 text-sm font-medium text-slate-400">Session Name</label><input type="text" id="session-name-input" class="bg-slate-800/50 light:bg-slate-100 border border-slate-600 light:border-slate-300 text-white light:text-black text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5" placeholder="e.g., Afternoon Test Run" required></div><button id="confirm-save-btn" class="w-full bg-green-600 text-white font-bold py-3 px-4 rounded-lg shadow-lg btn">💾 Confirm & Save</button></div><div id="load-session-view" class="hidden space-y-4"><p class="text-slate-300 light:text-slate-700">Select a previously saved session to load and review its data.</p><div id="saved-sessions-list" class="max-h-[50vh] overflow-y-auto space-y-2 pr-2"></div></div></div></div>
+
+    <!-- MAIN CONTENT -->
+    <main class="max-w-8xl mx-auto p-4 sm:p-6 lg:p-8 flex flex-col min-h-screen">
+        
+        <header class="flex flex-wrap justify-between items-center gap-4 opacity-0 animate-fade-in-up pb-6 border-b border-slate-700/50 light:border-slate-300" style="animation-delay: 0ms;">
+            <div><h1 class="text-3xl font-bold text-white light:text-slate-900">Elite RC Telemetry</h1><p class="text-slate-400 light:text-slate-600 text-sm sm:text-base">Advanced Performance Monitoring</p></div>
+            <div class="flex items-center gap-2">
+                <div class="relative"><select id="unit-selector" class="bg-white/5 light:bg-black/5 hover:bg-white/10 light:hover:bg-black/10 transition pl-3 pr-8 py-2 rounded-md appearance-none cursor-pointer"><option value="metric_ms">m/s</option><option value="metric_kmh">km/h</option><option value="imperial_mph">mph</option></select><svg class="w-4 h-4 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" /></svg></div>
+                <button id="help-btn" title="Help" aria-label="Open help modal" class="p-3 rounded-full hover:bg-white/10 light:hover:bg-black/10 transition btn"><svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.79 4 4 0 1.105-.448 2.105-1.172 2.828a4.002 4.002 0 00-2.828 1.172A4.002 4.002 0 0112 21M12 18h.01" /></svg></button>
+                <button id="theme-toggle" title="Toggle Theme" aria-label="Toggle color theme" class="p-3 rounded-full hover:bg-white/10 light:hover:bg-black/10 transition btn"></button>
+            </div>
+        </header>
+
+        <div id="unsupported-browser" class="hidden glass-panel rounded-xl p-4 text-center text-yellow-500 border border-yellow-500/50 mt-6"><p><strong>Warning:</strong> Your browser does not support Web Bluetooth. Please use a compatible browser like Chrome or Edge.</p></div>
+
+        <div id="main-grid" class="mt-6 flex-grow">
+            
+            <!-- This column contains the graph and demo panel -->
+            <div id="graph-column" class="flex flex-col gap-6">
+                 <div id="demo-game-panel" class="hidden glass-panel p-2 sm:p-4 rounded-2xl opacity-0 animate-fade-in-up" style="animation-delay: 200ms;">
+                    <div id="demo-game-container">
+                        <canvas id="particleCanvas"></canvas>
+                        <div id="road-markings"></div>
+                        <div id="car">
+                             <div class="relative w-full h-full">
+                                <div class="absolute inset-0 bg-gradient-to-b from-red-600 to-red-800 rounded-[25px] shadow-lg shadow-black/50"><div class="w-full h-full rounded-[25px] shadow-[inset_0px_0px_15px_rgba(0,0,0,0.5)]"></div></div>
+                                <div class="absolute top-[12px] left-1/2 -translate-x-1/2 w-[60%] h-[85%] bg-gray-800 rounded-[20px]"></div>
+                                <div class="absolute top-[15px] left-1/2 -translate-x-1/2 w-[54%] h-[31%] bg-gradient-to-b from-cyan-400 to-blue-600 rounded-t-[18px] rounded-b-lg"></div>
+                                <div class="absolute bottom-[15px] left-1/2 -translate-x-1/2 w-[54%] h-[25%] bg-gradient-to-b from-cyan-400 to-blue-600 rounded-b-[18px] rounded-t-lg"></div>
+                                <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[54%] h-[28%] bg-gradient-to-b from-red-500 to-red-700"><div class="absolute inset-[3px] bg-gray-800 rounded-md"></div></div>
+                                <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[60%] h-[62%] bg-white/10 rounded-full blur-md"></div>
+                                <div id="headlights" class="absolute top-[4px] w-full flex justify-between px-[15%]"><div class="w-6 h-5 bg-white/10 rounded-full blur-sm"></div><div class="w-6 h-5 bg-white/10 rounded-full blur-sm"></div></div>
+                                <div id="taillights" class="absolute bottom-[4px] w-full flex justify-between px-[15%]"><div class="w-6 h-5 bg-red-500/20 rounded-full blur-sm"></div><div class="w-6 h-5 bg-red-500/20 rounded-full blur-sm"></div></div>
+                                <div id="high-mount-brake-light" class="absolute bottom-[36%] left-1/2 -translate-x-1/2 w-[30%] h-[4px] bg-red-500/20 rounded-sm transition-all duration-200"></div>
+                                <div class="absolute top-[10px] w-full flex justify-between px-[10%]"><div id="signal-fl" class="w-3 h-3 rounded-full bg-amber-500/20"></div><div id="signal-fr" class="w-3 h-3 rounded-full bg-amber-500/20"></div></div>
+                                <div class="absolute bottom-[10px] w-full flex justify-between px-[10%]"><div id="signal-rl" class="w-3 h-3 rounded-full bg-amber-500/20"></div><div id="signal-rr" class="w-3 h-3 rounded-full bg-amber-500/20"></div></div>
+                            </div>
+                        </div>
+                        <div id="joystick-container" class="hidden">
+                            <div id="joystick-base">
+                                <div id="joystick-stick"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div id="graph-panel" class="relative glass-panel p-2 sm:p-4 rounded-2xl flex flex-col flex-grow min-h-0 opacity-0 animate-fade-in-up" style="animation-delay: 200ms;">
+                    <div id="graph-title-bar" class="flex flex-wrap gap-x-4 gap-y-3 justify-between items-center mb-4">
+                        <h2 id="graph-title" class="text-lg sm:text-xl font-bold">Telemetry Graphs</h2>
+                        <div class="flex items-center gap-x-2 gap-y-2 text-sm">
+                            <div id="export-buttons-container" class="flex items-center gap-x-2">
+                                <button id="export-csv-btn" class="text-sm bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-3 rounded-lg btn">CSV</button>
+                                <button id="export-png-btn" class="text-sm bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-3 rounded-lg btn">PNG</button>
+                            </div>
+                            <button id="toggle-view-btn" class="text-sm bg-teal-600 hover:bg-teal-700 text-white font-bold p-2 rounded-lg btn" title="View Full Session" aria-label="Toggle graph view">
+                                <svg id="icon-full-view" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M1 5.25A2.25 2.25 0 013.25 3h13.5A2.25 2.25 0 0119 5.25v9.5A2.25 2.25 0 0116.75 17H3.25A2.25 2.25 0 011 14.75v-9.5zm1.5 0v9.5c0 .138.112.25.25.25h13.5a.25.25 0 00.25-.25v-9.5a.25.25 0 00-.25-.25H3.25a.25.25 0 00-.25.25z" clip-rule="evenodd" /><path fill-rule="evenodd" d="M5 6a.5.5 0 01.5.5v2a.5.5 0 01-1 0v-2A.5.5 0 015 6zm2.5 0a.5.5 0 01.5.5v5a.5.5 0 01-1 0v-5a.5.5 0 01.5-.5zM10 6a.5.5 0 01.5.5v3a.5.5 0 01-1 0v-3a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0v-6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v1a.5.5 0 01-1 0v-1a.5.5 0 01.5-.5z" clip-rule="evenodd" /></svg>
+                                <svg id="icon-live-view" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 hidden" viewBox="0 0 20 20" fill="currentColor"><path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" /><circle cx="10" cy="10" r="8.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="animate-pulse" /></svg>
+                            </button>
+                             <button id="fullscreen-btn" class="text-sm bg-indigo-600 hover:bg-indigo-700 text-white font-bold p-2 rounded-lg btn" title="Toggle Fullscreen" aria-label="Toggle graph fullscreen">
+                                <svg id="fullscreen-icon-expand" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1v4m0 0h-4m4 0l-5-5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5v4m0 0h-4" /></svg>
+                                <svg id="fullscreen-icon-compress" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-4-4m0 0l-4 4m4-4V3m0 16v-4m-4-4H3m14 0h4M3 9h4m14 0h-4" /></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="relative flex-grow min-h-0"><canvas id="telemetryChart"></canvas></div>
+                    <div id="graph-toggles" class="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-sm pt-4">
+                        <label class="flex items-center cursor-pointer graph-toggle" style="--toggle-color: var(--color-velocity);"><input type="checkbox" data-index="0" class="sr-only graph-checkbox" checked><span class="w-10 h-6 flex items-center flex-shrink-0 p-1 rounded-full duration-300 ease-in-out bg-slate-700 light:bg-slate-300"><span class="w-4 h-4 rounded-full shadow-md duration-300 ease-in-out bg-white dot"></span></span><span class="ml-2" style="color: var(--color-velocity);">Velocity</span></label>
+                        <label class="flex items-center cursor-pointer graph-toggle" style="--toggle-color: var(--color-accel);"><input type="checkbox" data-index="1" class="sr-only graph-checkbox" checked><span class="w-10 h-6 flex items-center flex-shrink-0 p-1 rounded-full duration-300 ease-in-out bg-slate-700 light:bg-slate-300"><span class="w-4 h-4 rounded-full shadow-md duration-300 ease-in-out bg-white dot"></span></span><span class="ml-2" style="color: var(--color-accel);">Accel</span></label>
+                        <label class="flex items-center cursor-pointer graph-toggle" style="--toggle-color: var(--color-distance);"><input type="checkbox" data-index="2" class="sr-only graph-checkbox"><span class="w-10 h-6 flex items-center flex-shrink-0 p-1 rounded-full duration-300 ease-in-out bg-slate-700 light:bg-slate-300"><span class="w-4 h-4 rounded-full shadow-md duration-300 ease-in-out bg-white dot"></span></span><span class="ml-2" style="color: var(--color-distance);">Distance</span></label>
+                        <label class="flex items-center cursor-pointer graph-toggle" style="--toggle-color: var(--color-displacement);"><input type="checkbox" data-index="3" class="sr-only graph-checkbox"><span class="w-10 h-6 flex items-center flex-shrink-0 p-1 rounded-full duration-300 ease-in-out bg-slate-700 light:bg-slate-300"><span class="w-4 h-4 rounded-full shadow-md duration-300 ease-in-out bg-white dot"></span></span><span class="ml-2" style="color: var(--color-displacement);">Displacement</span></label>
+                        <label class="flex items-center cursor-pointer graph-toggle" style="--toggle-color: var(--color-jerk);"><input type="checkbox" data-index="4" class="sr-only graph-checkbox"><span class="w-10 h-6 flex items-center flex-shrink-0 p-1 rounded-full duration-300 ease-in-out bg-slate-700 light:bg-slate-300"><span class="w-4 h-4 rounded-full shadow-md duration-300 ease-in-out bg-white dot"></span></span><span class="ml-2" style="color: var(--color-jerk);">Jerk</span></label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- This column contains the controls and stats -->
+            <div id="sidebar-column" class="space-y-6 flex flex-col">
+                <div class="glass-panel p-4 sm:p-6 rounded-2xl opacity-0 animate-fade-in-up" style="animation-delay: 100ms;">
+                    <h2 class="panel-title flex items-center justify-between"><span>Connection</span><span id="connection-status" class="text-xs font-bold uppercase px-2 py-1 rounded-full bg-red-500/80 text-white"></span></h2>
+                    <div class="grid grid-cols-2 gap-3"><button id="connect-btn" class="col-span-2 bg-blue-600 text-white font-bold py-3 px-4 rounded-lg shadow-lg btn">🔗 Connect</button><button id="demo-btn" class="col-span-2 bg-purple-600 text-white font-bold py-3 px-4 rounded-lg shadow-lg btn">🎮 Demo Mode</button><button id="lap-btn" class="bg-amber-600 text-white font-bold py-3 px-4 rounded-lg btn" disabled>🏁 Mark Lap</button><button id="reset-btn" class="bg-slate-600 light:bg-slate-200 text-white light:text-slate-800 font-bold py-3 px-4 rounded-lg btn">🔄 Reset</button><button id="save-btn" class="bg-green-600 text-white font-bold py-3 px-4 rounded-lg btn" disabled>💾 Save</button><button id="load-btn" class="bg-sky-600 text-white font-bold py-3 px-4 rounded-lg btn">📂 Load</button></div>
+                </div>
+
+                <div class="glass-panel p-4 sm:p-6 rounded-2xl text-center opacity-0 animate-fade-in-up" style="animation-delay: 200ms;">
+                    <h2 class="panel-title mx-auto">Live Velocity</h2>
+                    <p id="current-speed" class="font-mono font-bold" style="color: var(--color-velocity);">0.00</p>
+                    <p id="speed-unit" class="text-slate-400 light:text-slate-600">m/s</p>
+                </div>
+
+                <div id="gauges-container" class="hidden glass-panel p-4 sm:p-6 rounded-2xl space-y-6 opacity-0 animate-fade-in-up" style="animation-delay: 300ms;">
+                    <div class="grid grid-cols-2 gap-4 items-center">
+                        <div class="flex flex-col items-center"><h3 class="font-semibold text-slate-300 light:text-slate-700 mb-2">Throttle</h3><svg viewBox="0 0 40 120" class="h-32"><rect x="15" y="10" width="10" height="100" rx="5" class="fill-slate-700 light:fill-slate-200"/><rect id="brake-bar" x="15" y="60" width="10" height="0" rx="5" style="fill: var(--color-accel);" class="gauge-indicator"/><rect id="throttle-bar" x="15" y="60" width="10" height="0" rx="5" style="fill: var(--color-velocity);" class="gauge-indicator" transform="scale(1, -1) translate(0, -120)"/><line x1="5" x2="35" y1="60" y2="60" class="stroke-slate-500 light:stroke-slate-400" stroke-width="2"/><text id="throttle-text" x="20" y="118" text-anchor="middle" class="fill-current text-sm font-bold">N</text></svg></div>
+                        <div class="flex flex-col items-center"><h3 class="font-semibold text-slate-300 light:text-slate-700 mb-2">G-Force</h3><div class="relative w-32 h-32"><svg viewBox="0 0 100 100" class="absolute inset-0"><circle cx="50" cy="50" r="15" fill="none" stroke-width="1" class="stroke-slate-700 light:stroke-slate-300" stroke-dasharray="2 2"></circle><circle cx="50" cy="50" r="30" fill="none" stroke-width="1" class="stroke-slate-700 light:stroke-slate-300"></circle><circle cx="50" cy="50" r="45" fill="none" stroke-width="1" class="stroke-slate-700 light:stroke-slate-300" stroke-dasharray="2 2"></circle><line x1="5" y1="50" x2="95" y2="50" stroke-width="0.5" class="stroke-slate-600 light:stroke-slate-400"></line><line x1="50" y1="5" x2="50" y2="95" stroke-width="0.5" class="stroke-slate-600 light:stroke-slate-400"></line><text x="50" y="18" text-anchor="middle" class="fill-current text-[8px]">1.0G</text><circle id="g-force-max-dot" cx="50" cy="50" r="4" class="fill-yellow-500/30 gauge-indicator"></circle><circle id="g-force-dot" cx="50" cy="50" r="5" style="fill: var(--color-gforce);" class="gauge-indicator"></circle><text id="g-force-text" x="50" y="95" text-anchor="middle" class="fill-current text-xs">0.00 G</text></svg></div></div>
+                    </div>
+                    <div class="pt-2 flex flex-col items-center"><h3 class="font-semibold text-slate-300 light:text-slate-700 mb-2">Steering</h3><svg viewBox="0 0 120 30" class="w-48"><rect x="10" y="10" width="100" height="10" rx="5" class="fill-slate-700 light:fill-slate-200"/><rect id="steering-indicator" x="55" y="8" width="10" height="14" rx="3" style="fill: var(--color-displacement);" class="gauge-indicator"/><line x1="60" y1="5" x2="60" y2="25" stroke-width="2" class="stroke-slate-500 light:stroke-slate-400"/><text id="steering-text" x="60" y="28" text-anchor="middle" class="fill-current text-xs font-bold">0°</text></svg></div>
+                </div>
+                
+                <div class="glass-panel p-4 sm:p-6 rounded-2xl space-y-4 opacity-0 animate-fade-in-up" style="animation-delay: 400ms;">
+                    <h2 class="panel-title">Session Stats</h2>
+                    <div id="max-velocity-box" class="flex justify-between items-center p-2 rounded-lg transition-colors duration-500"><span class="text-slate-400 light:text-slate-600">🚀 Max Vel</span><span id="max-velocity" class="font-bold text-xl" style="color: var(--color-gforce);">0.00</span></div>
+                    <div class="flex justify-between items-center p-2"><span class="text-slate-400 light:text-slate-600">📊 Avg Vel</span><span id="avg-velocity" class="font-bold text-xl" style="color: var(--color-distance);">0.00</span></div>
+                    <div class="flex justify-between items-center p-2"><span class="text-slate-400 light:text-slate-600">📏 Distance</span><span id="total-distance" class="font-bold text-xl" style="color: var(--color-displacement);">0.00</span></div>
+                    <div class="flex justify-between items-center p-2"><span class="text-slate-400 light:text-slate-600">⏱️ Duration</span><span id="duration" class="font-bold text-xl" style="color: var(--color-velocity);">0.00 s</span></div>
+                </div>
+                 <div id="lap-times-container" class="hidden glass-panel p-4 sm:p-6 rounded-2xl space-y-2 opacity-0 animate-fade-in-up" style="animation-delay: 500ms;">
+                    <h2 class="panel-title">Lap Times</h2>
+                    <div class="max-h-32 overflow-y-auto pr-2 space-y-1" id="lap-times-list"></div>
+                </div>
+            </div>
+        </div>
+
+       <footer class="mt-8 py-6 text-center text-slate-400 light:text-slate-600 border-t border-slate-700/50 light:border-slate-300">
+          <p class="text-sm mb-2">
+            Developed by <a href="https://github.com/sadeepas" target="_blank" class="font-semibold text-slate-300 light:text-slate-700 hover:text-blue-400 light:hover:text-blue-600 transition">Sadeepa Lakshan</a>
+          </p>
+          <div class="flex justify-center space-x-6 mb-4 text-xl">
+            <a href="https://github.com/sadeepas" target="_blank" aria-label="GitHub" class="hover:text-white light:hover:text-black transition"><i class="fab fa-github"></i></a>
+            <a href="https://www.linkedin.com/in/sadeepa-lakshan/" target="_blank" aria-label="LinkedIn" class="hover:text-white light:hover:text-black transition"><i class="fab fa-linkedin"></i></a>
+            <a href="mailto:sadeepapemasiri2@gmail.com" aria-label="Email" class="hover:text-white light:hover:text-black transition"><i class="fas fa-envelope"></i></a>
+          </div>
+          <p class="text-xs">
+            &copy; <span id="year"></span> All Rights Reserved
+          </p>
+        </footer>
+    </main>
+    
+<script>
+// --- Classes for Modular Code ---
+
+/**
+ * Manages all UI updates and interactions.
+ */
+class UI {
+    constructor(dom) { this.dom = dom; }
+
+    updateConnectionStatus(status, message = '') {
+        this.dom.loadingOverlay.classList.toggle('hidden', status !== 'connecting');
+        if (message) this.dom.loadingMessage.textContent = message;
+        const statusMap = {
+            disconnected: { text: 'Disconnected', color: 'bg-red-500/80' },
+            connecting: { text: 'Connecting', color: 'bg-yellow-500/80' },
+            connected: { text: 'Connected', color: 'bg-green-500/80' },
+            demo: { text: 'Demo Mode', color: 'bg-purple-500/80' },
+            reviewing: { text: 'Reviewing', color: 'bg-sky-500/80' }
+        };
+        const s = statusMap[status];
+        this.dom.connectionStatus.textContent = s.text;
+        this.dom.connectionStatus.className = `text-xs font-bold uppercase px-2 py-1 rounded-full text-white ${s.color}`;
+        this.dom.connectBtn.textContent = status === 'connected' ? '🔌 Disconnect' : '🔗 Connect';
+        this.dom.demoBtn.textContent = status === 'demo' ? '🛑 Stop Demo' : '🎮 Demo Mode';
+        
+        const isLive = status === 'connected' || status === 'demo';
+        const isIdle = status === 'disconnected';
+        this.dom.lapBtn.disabled = !isLive;
+        this.dom.connectBtn.disabled = !isIdle && status !== 'connected';
+        this.dom.demoBtn.disabled = !isIdle && status !== 'demo';
+        this.dom.loadBtn.disabled = !isIdle && status !== 'reviewing';
+        this.dom.resetBtn.textContent = status === 'reviewing' ? '⬅️ Exit Review' : '🔄 Reset';
+        this.updateGraphViewButton(false, status === 'reviewing');
+
+        this.dom.demoGamePanel.classList.toggle('hidden', status !== 'demo');
+        this.dom.gaugesContainer.classList.toggle('hidden', !isLive && status !== 'reviewing');
+    }
+
+    updateStats(stats, settings) {
+        const { maxV, avgV, dist, duration, lastV, currentV } = stats;
+        const vFactor = settings.factors.velocity;
+        const dFactor = settings.factors.distance;
+        
+        this.animateNumber(this.dom.currentSpeed, lastV * vFactor, currentV * vFactor);
+        this.dom.maxVelocity.textContent = `${(maxV * vFactor).toFixed(2)}`;
+        this.dom.avgVelocity.textContent = `${(avgV * vFactor).toFixed(2)}`;
+        this.dom.totalDistance.textContent = `${(dist * dFactor).toFixed(2)}`;
+        this.dom.duration.textContent = `${duration.toFixed(2)} s`;
+
+        if (stats.newMaxV) {
+            this.dom.maxVelocityBox.classList.add('is-highlighted');
+            setTimeout(() => this.dom.maxVelocityBox.classList.remove('is-highlighted'), 1500);
+        }
+    }
+
+    updateUnits(settings) {
+        this.dom.speedUnit.textContent = settings.units.velocity;
+        this.dom.maxVelocity.nextSibling.textContent = ` ${settings.units.velocity}`;
+        this.dom.avgVelocity.nextSibling.textContent = ` ${settings.units.velocity}`;
+        this.dom.totalDistance.nextSibling.textContent = ` ${settings.units.distance}`;
+    }
+
+    updateGauges(data) {
+        if (data.throttle > 0) { this.dom.throttleBar.setAttribute('height', data.throttle * 50); this.dom.brakeBar.setAttribute('height', 0); } 
+        else { this.dom.throttleBar.setAttribute('height', 0); this.dom.brakeBar.setAttribute('height', -data.throttle * 50); }
+        const throttlePercent = data.throttle * 100;
+        this.dom.throttleText.textContent = Math.abs(throttlePercent) < 1 ? 'N' : throttlePercent.toFixed(0) + '%';
+        
+        const steeringPos = 55 + (data.steeringAngle / 45) * 45;
+        this.dom.steeringIndicator.setAttribute('x', steeringPos);
+        this.dom.steeringText.textContent = `${data.steeringAngle.toFixed(0)}°`;
+
+        const maxG = 2.0; 
+        const gX = 50 + (data.gForceLat / maxG) * 45;
+        const gY = 50 + (-data.gForceLon / maxG) * 45;
+        this.dom.gForceDot.setAttribute('cx', gX);
+        this.dom.gForceDot.setAttribute('cy', gY);
+        this.dom.gForceText.textContent = `${data.gForceTotal.toFixed(2)} G`;
+        if (data.isNewMaxG) {
+            this.dom.gForceMaxDot.setAttribute('cx', gX);
+            this.dom.gForceMaxDot.setAttribute('cy', gY);
+        }
+    }
+
+    addLapTime(time, lapNumber) {
+        this.dom.lapTimesContainer.classList.remove('hidden');
+        const lapEl = document.createElement('div');
+        lapEl.className = 'flex justify-between text-sm animate-slide-in-bottom';
+        lapEl.innerHTML = `<span>Lap ${lapNumber}</span><span class="font-mono">${time.toFixed(2)}s</span>`;
+        this.dom.lapTimesList.prepend(lapEl);
+    }
+    
+    reset() {
+        ['maxVelocity', 'avgVelocity', 'totalDistance', 'duration'].forEach(id => {
+            const el = this.dom[id];
+            if (el) el.textContent = id === 'duration' ? '0.00 s' : '0.00';
+        });
+        this.animateNumber(this.dom.currentSpeed, parseFloat(this.dom.currentSpeed.innerText), 0);
+        this.dom.lapTimesList.innerHTML = '';
+        this.dom.lapTimesContainer.classList.add('hidden');
+        this.updateGauges({ throttle: 0, steeringAngle: 0, gForceLat: 0, gForceLon: 0, gForceTotal: 0 });
+        this.dom.gForceMaxDot.setAttribute('cx', 50);
+        this.dom.gForceMaxDot.setAttribute('cy', 50);
+    }
+
+    animateNumber(el, start, end, duration = 100) {
+        if (Math.abs(start - end) < 0.01) { el.textContent = end.toFixed(2); return; }
+        let startTimestamp = null;
+        const step = (timestamp) => {
+            if (!startTimestamp) startTimestamp = timestamp;
+            const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+            el.textContent = (progress * (end - start) + start).toFixed(2);
+            if (progress < 1) window.requestAnimationFrame(step);
+        };
+        window.requestAnimationFrame(step);
+    }
+
+    showToast(message, type = 'info') {
+        const colors = { info: 'bg-blue-500', success: 'bg-green-500', warn: 'bg-yellow-500', error: 'bg-red-500' };
+        const toast = document.createElement('div');
+        toast.className = `animate-slide-in-bottom text-white px-4 py-2 rounded-lg shadow-lg ${colors[type]}`;
+        toast.textContent = message;
+        this.dom.toastContainer.appendChild(toast);
+        setTimeout(() => { toast.style.animation = 'fade-out 0.5s forwards'; setTimeout(() => toast.remove(), 500); }, 4500);
+    }
+
+    toggleModal(modal, show) {
+        modal.classList.toggle('hidden', !show);
+        modal.classList.toggle('flex', show);
+    }
+    
+    updateGraphViewButton(isFullView, isReviewing) {
+        this.dom.toggleViewBtn.classList.toggle('hidden', isReviewing);
+        if (isReviewing) return;
+        
+        this.dom.iconFullView.classList.toggle('hidden', isFullView);
+        this.dom.iconLiveView.classList.toggle('hidden', !isFullView);
+        this.dom.toggleViewBtn.title = isFullView ? 'View Live Feed' : 'View Full Session';
+    }
+}
+
+/**
+ * Manages the Chart.js instance.
+ */
+class ChartManager {
+    constructor(canvas, settings) {
+        this.settings = settings;
+        this.isFullView = false;
+        this.LIVE_PREVIEW_WINDOW_SECONDS = 15; 
+        this.MAX_DATA_POINTS = this.LIVE_PREVIEW_WINDOW_SECONDS * 60;
+
+        this.chartColors = {
+            dark: { grid: 'rgba(148, 163, 184, 0.2)', ticks: '#94a3b8' },
+            light: { grid: 'rgba(0, 0, 0, 0.1)', ticks: '#475569' }
+        };
+        
+        Chart.defaults.font.size = 14;
+
+        const datasets = [
+            { id: 'velocity', label: 'Velocity', unit: 'm/s', color: 'var(--color-velocity)', yAxisID: 'y', hidden: false, fill: true },
+            { id: 'acceleration', label: 'Acceleration', unit: 'm/s²', color: 'var(--color-accel)', yAxisID: 'y1', hidden: false, borderDash: [5, 5] },
+            { id: 'distance', label: 'Distance', unit: 'm', color: 'var(--color-distance)', yAxisID: 'y2', hidden: true },
+            { id: 'displacement', label: 'Displacement', unit: 'm', color: 'var(--color-displacement)', yAxisID: 'y2', hidden: true, borderDash: [5, 5] },
+            { id: 'jerk', label: 'Jerk', unit: 'm/s³', color: 'var(--color-jerk)', yAxisID: 'y3', hidden: true }
+        ];
+
+        this.chart = new Chart(canvas.getContext('2d'), {
+            type: 'line',
+            data: { labels: [], datasets: datasets.map(d => this.createDataset(d)) },
+            options: {
+                responsive: true, maintainAspectRatio: false, 
+                interaction: { mode: 'index', intersect: false },
+                scales: this.createScales(datasets),
+                plugins: { 
+                    legend: { display: false }, 
+                    tooltip: { 
+                        titleFont: { size: 16 }, bodyFont: { size: 14 },
+                        boxPadding: 5, usePointStyle: true
+                    } 
+                },
+                animation: false,
+            }
+        });
+        this.updateTheme();
+    }
+    
+    createDataset(d) {
+        const cssVarName = d.color.slice(4, -1);
+        const resolvedColor = getComputedStyle(document.documentElement).getPropertyValue(cssVarName).trim();
+        return {
+            label: `${d.label} (${d.unit})`, yAxisID: d.yAxisID, data: [],
+            borderColor: resolvedColor, backgroundColor: `${resolvedColor}33`,
+            fill: d.fill || false, tension: 0.4, borderWidth: 2.5, 
+            borderDash: d.borderDash || [], hidden: d.hidden,
+            pointRadius: 0, pointHoverRadius: 8,
+        };
+    }
+
+    createScales(datasets) {
+        const scales = { x: { title: { display: true, text: 'Time (s)', font: { weight: 'bold' } }, grid: {} } };
+        const usedAxes = new Set();
+        datasets.forEach(d => {
+            if (!usedAxes.has(d.yAxisID)) {
+                scales[d.yAxisID] = {
+                    type: 'linear', position: ['y1', 'y3'].includes(d.yAxisID) ? 'right' : 'left',
+                    display: !d.hidden, title: { display: true, text: d.label, font: { weight: 'bold' } },
+                    grid: { drawOnChartArea: d.yAxisID === 'y' }
+                };
+                usedAxes.add(d.yAxisID);
+            }
+        });
+        return scales;
+    }
+    
+    update(dataPoint) {
+        if (this.isFullView) return; // In full view, we don't push live data to the graph
+        
+        const labels = this.chart.data.labels;
+        labels.push(dataPoint.time.toFixed(2));
+        this.chart.data.datasets.forEach((ds, i) => {
+            const key = ['velocity', 'acceleration', 'distance', 'displacement', 'jerk'][i];
+            ds.data.push(dataPoint[key]);
+        });
+        while (labels.length > this.MAX_DATA_POINTS) {
+            labels.shift();
+            this.chart.data.datasets.forEach(ds => ds.data.shift());
+        }
+        this.chart.update('none');
+    }
+    
+    setView(isFull) {
+        this.isFullView = isFull;
+        const fullData = this.settings.fullSessionData;
+        
+        // Performance optimization: hide points on large datasets in full view
+        const showPoints = !isFull || fullData.labels.length < 500;
+        this.chart.data.datasets.forEach(ds => { ds.pointRadius = showPoints ? 0 : 0; });
+        
+        if (isFull) {
+            this.chart.data.labels = fullData.labels;
+            this.chart.data.datasets.forEach((ds, i) => {
+                const key = ['velocity', 'acceleration', 'distance', 'displacement', 'jerk'][i];
+                ds.data = fullData.datasets[key];
+            });
+        } else {
+            // Revert to live view (last MAX_DATA_POINTS)
+            this.chart.data.labels = fullData.labels.slice(-this.MAX_DATA_POINTS);
+            this.chart.data.datasets.forEach((ds, i) => {
+                const key = ['velocity', 'acceleration', 'distance', 'displacement', 'jerk'][i];
+                ds.data = fullData.datasets[key].slice(-this.MAX_DATA_POINTS);
+            });
+        }
+        this.chart.update('reset');
+    }
+
+    updateUnits() {
+        const { velocity, distance } = this.settings.units;
+        this.chart.options.scales.y.title.text = `Velocity (${velocity})`;
+        this.chart.options.scales.y2.title.text = `Distance (${distance})`;
+        this.chart.options.scales.y1.title.text = `Accel. (${velocity}/s²)`;
+        this.chart.options.scales.y3.title.text = `Jerk (${velocity}/s³)`;
+        this.chart.update();
+    }
+
+    toggleDataset(index, isVisible) {
+        this.chart.setDatasetVisibility(index, isVisible);
+        const axisID = this.chart.data.datasets[index].yAxisID;
+        const isAxisStillNeeded = this.chart.data.datasets.some((ds, i) => ds.yAxisID === axisID && this.chart.isDatasetVisible(i));
+        this.chart.options.scales[axisID].display = isAxisStillNeeded;
+        this.chart.update();
+    }
+    
+    updateTheme(isDark = true) {
+        const themeColors = isDark ? this.chartColors.dark : this.chartColors.light;
+        Object.values(this.chart.options.scales).forEach(axis => {
+            axis.ticks.color = themeColors.ticks;
+            axis.title.color = themeColors.ticks;
+            axis.grid.color = themeColors.grid;
+        });
+        this.chart.update();
+    }
+
+    reset() {
+        this.isFullView = false;
+        this.chart.data.labels = [];
+        this.chart.data.datasets.forEach(ds => ds.data = []);
+        this.chart.update('none');
+    }
+
+    export(type) {
+        const a = document.createElement('a');
+        if (type === 'png') {
+            a.href = this.chart.toBase64Image('image/png', 1.0);
+            a.download = 'rc_telemetry_chart.png';
+        } else if (type === 'csv') {
+            const fullData = this.settings.fullSessionData;
+            if (!fullData || fullData.labels.length === 0) return false;
+            
+            let csv = "Time(s)," + this.chart.data.datasets.map(ds => ds.label).join(',') + "\n";
+            fullData.labels.forEach((label, i) => {
+                const row = [ label,
+                    (fullData.datasets.velocity[i] || 0).toFixed(4),
+                    (fullData.datasets.acceleration[i] || 0).toFixed(4),
+                    (fullData.datasets.distance[i] || 0).toFixed(4),
+                    (fullData.datasets.displacement[i] || 0).toFixed(4),
+                    (fullData.datasets.jerk[i] || 0).toFixed(4),
+                ];
+                csv += row.join(',') + "\n";
+            });
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            a.href = URL.createObjectURL(blob);
+            a.download = 'rc_telemetry_data.csv';
+        }
+        a.click();
+        URL.revokeObjectURL(a.href);
+        return true;
+    }
+}
+
+/**
+ * Manages the state and data for a single telemetry session.
+ */
+class Session {
+    constructor(ui, chartManager, settings) {
+        this.ui = ui;
+        this.chart = chartManager;
+        this.settings = settings;
+        this.resetState();
+    }
+
+    resetState() {
+        if (this.durationUpdater) clearInterval(this.durationUpdater);
+        Object.assign(this, {
+            data: [], startTime: 0, lastTimestamp: 0, maxVelocity: 0,
+            maxGForce: 0, totalDistance: 0, totalDisplacement: 0, lapCount: 0,
+            lapStartTime: 0, lapTimes: [], durationUpdater: null, lastVelocity: 0,
+            hasData: false,
+        });
+        this.settings.fullSessionData = {
+            labels: [],
+            datasets: { velocity: [], acceleration: [], distance: [], displacement: [], jerk: [] }
+        };
+        this.ui.dom.saveBtn.disabled = true;
+    }
+
+    start() {
+        this.resetState();
+        this.startTime = Date.now();
+        this.lastTimestamp = this.startTime;
+        this.lapStartTime = this.startTime;
+        this.durationUpdater = setInterval(() => this.updateDuration(), 100);
+    }
+    
+    stop() {
+        clearInterval(this.durationUpdater);
+        this.durationUpdater = null;
+        if(this.hasData) this.chart.setView(true);
+    }
+
+    reset() {
+        this.stop();
+        this.resetState();
+        this.ui.reset();
+        this.chart.reset();
+    }
+
+    handleData(velocity, physicsData = {}) {
+        if (this.startTime === 0 || isNaN(velocity)) return;
+        if (!this.hasData) {
+            this.hasData = true;
+            this.ui.dom.saveBtn.disabled = false;
+        }
+
+        const now = Date.now();
+        const time = (now - this.startTime) / 1000;
+        const deltaTime = (now - this.lastTimestamp) / 1000;
+        if (deltaTime <= 0.001) return;
+        this.lastTimestamp = now;
+
+        const last = this.data.length > 0 ? this.data[this.data.length - 1] : { velocity: 0, acceleration: 0, jerk: 0 };
+        const acceleration = (velocity - last.velocity) / deltaTime;
+        const jerk = (acceleration - last.acceleration) / deltaTime;
+        this.totalDistance += Math.abs(velocity) * deltaTime;
+        this.totalDisplacement += velocity * deltaTime;
+
+        const dataPoint = { time, velocity: Math.abs(velocity), acceleration, distance: this.totalDistance, displacement: this.totalDisplacement, jerk };
+        this.data.push(dataPoint);
+
+        this.settings.fullSessionData.labels.push(time.toFixed(2));
+        Object.keys(this.settings.fullSessionData.datasets).forEach(key => {
+            this.settings.fullSessionData.datasets[key].push(dataPoint[key]);
+        });
+
+        let newMaxV = false;
+        if (Math.abs(velocity) > this.maxVelocity) {
+            this.maxVelocity = Math.abs(velocity);
+            newMaxV = true;
+        }
+
+        if (physicsData.gForceTotal > this.maxGForce) {
+            this.maxGForce = physicsData.gForceTotal;
+            physicsData.isNewMaxG = true;
+        } else {
+             physicsData.isNewMaxG = false;
+        }
+        
+        const avgVelocity = this.data.reduce((sum, p) => sum + p.velocity, 0) / this.data.length;
+        
+        this.chart.update(dataPoint);
+        this.ui.updateStats({
+            currentV: Math.abs(velocity), lastV: Math.abs(this.lastVelocity), maxV: this.maxVelocity, avgV: avgVelocity,
+            dist: this.totalDistance, duration: time, newMaxV
+        }, this.settings);
+        this.lastVelocity = velocity;
+
+        if (Object.keys(physicsData).length > 0) {
+            this.ui.updateGauges(physicsData);
+        }
+    }
+    
+    handleBleData(event) {
+        const value = event.target.value;
+        const velocity = new DataView(value.buffer).getFloat32(0, true);
+        this.handleData(velocity);
+    }
+
+    markLap() {
+        if (this.startTime === 0) return;
+        const now = Date.now();
+        const lapTime = (now - this.lapStartTime) / 1000;
+        this.lapStartTime = now;
+        this.lapCount++;
+        this.lapTimes.push(lapTime);
+        this.ui.addLapTime(lapTime, this.lapCount);
+    }
+
+    updateDuration() {
+        const time = this.startTime > 0 ? (Date.now() - this.startTime) / 1000 : 0;
+        this.ui.dom.duration.textContent = `${time.toFixed(2)} s`;
+    }
+
+    loadState(savedSession) {
+        this.reset();
+        this.maxVelocity = savedSession.summary.maxVelocity;
+        this.totalDistance = savedSession.summary.totalDistance;
+        this.lapTimes = savedSession.summary.lapTimes;
+        this.settings.fullSessionData = savedSession.fullData;
+        this.hasData = true;
+
+        this.lapTimes.forEach((lapTime, index) => {
+            this.ui.addLapTime(lapTime, index + 1);
+        });
+
+        const dataLen = savedSession.fullData.datasets.velocity.length;
+        const avgVelocity = dataLen > 0 ? savedSession.fullData.datasets.velocity.reduce((a, b) => a + b, 0) / dataLen : 0;
+
+        this.ui.updateStats({
+            currentV: 0, lastV: 0,
+            maxV: this.maxVelocity,
+            avgV: avgVelocity,
+            dist: this.totalDistance,
+            duration: savedSession.summary.duration,
+        }, this.settings);
+    }
+}
+
+/**
+ * Simulates an RC car for demonstration purposes.
+ */
+class DemoMode {
+    constructor(session) {
+        this.session = session;
+        this.dom = {
+            container: document.getElementById('demo-game-container'),
+            car: document.getElementById('car'),
+            taillights: document.getElementById('taillights'),
+            highMountBrakeLight: document.getElementById('high-mount-brake-light'),
+            roadMarkings: document.getElementById('road-markings'),
+            particleCanvas: document.getElementById('particleCanvas'),
+            signals: {
+                fl: document.getElementById('signal-fl'), fr: document.getElementById('signal-fr'),
+                rl: document.getElementById('signal-rl'), rr: document.getElementById('signal-rr'),
+            },
+            joystickContainer: document.getElementById('joystick-container'),
+            joystickStick: document.getElementById('joystick-stick'),
+        };
+        this.pctx = this.dom.particleCanvas.getContext('2d');
+        this.particles = [];
+        this.keys = {};
+        this.touch = { active: false, x: 0, y: 0, startX: 0, startY: 0 };
+        this.car = {
+            x: 0, y: 0, angle: 0, speed: 0, steerAngle: 0, throttle: 0,
+            maxSpeed: 45, maxSteerAngle: Math.PI / 8, engineForce: 40.0,
+            brakeForce: 50.0, dragCoefficient: 0.025, frictionCoefficient: 0.09,
+            wheelbase: 2.8, steerReturnRate: 0.1, steerSpeed: 0.08, throttleRate: 0.08,
+        };
+        this.camera = { x: 0, y: 0, smoothness: 0.05, shake: 0 };
+        this.signals = { left: false, right: false };
+        this.loopId = null;
+        this.PIXELS_PER_METER = 20;
+        this.GRAVITY = 9.81;
+    }
+
+    start() {
+        this.session.start();
+        this.resizeCanvas();
+        window.addEventListener('resize', this.resizeCanvas.bind(this));
+        document.addEventListener('keydown', this.handleKeys.bind(this));
+        document.addEventListener('keyup', this.handleKeys.bind(this));
+        
+        if ('ontouchstart' in window) {
+            const joystickEl = this.dom.joystickContainer;
+            joystickEl.classList.remove('hidden');
+            joystickEl.addEventListener('touchstart', this.handleTouch.bind(this), { passive: false });
+            joystickEl.addEventListener('touchmove', this.handleTouch.bind(this), { passive: false });
+            joystickEl.addEventListener('touchend', this.handleTouch.bind(this), { passive: false });
+            joystickEl.addEventListener('touchcancel', this.handleTouch.bind(this), { passive: false });
+        }
+        
+        this.loopId = requestAnimationFrame(this.gameLoop.bind(this));
+    }
+    
+    stop() {
+        if (this.loopId) cancelAnimationFrame(this.loopId);
+        this.loopId = null;
+        window.removeEventListener('resize', this.resizeCanvas.bind(this));
+        document.removeEventListener('keydown', this.handleKeys.bind(this));
+        document.removeEventListener('keyup', this.handleKeys.bind(this));
+
+        if ('ontouchstart' in window) {
+            const joystickEl = this.dom.joystickContainer;
+            joystickEl.classList.add('hidden');
+            joystickEl.removeEventListener('touchstart', this.handleTouch.bind(this));
+            joystickEl.removeEventListener('touchmove', this.handleTouch.bind(this));
+            joystickEl.removeEventListener('touchend', this.handleTouch.bind(this));
+            joystickEl.removeEventListener('touchcancel', this.handleTouch.bind(this));
+        }
+
+        this.dom.container.style.transform = '';
+        this.session.stop();
+    }
+    
+    handleKeys(e) {
+        const key = e.key.toLowerCase();
+        this.keys[key] = e.type === 'keydown';
+        if (e.type === 'keydown') {
+            if (key === 'q') { this.signals.left = !this.signals.left; this.signals.right = false; }
+            if (key === 'e') { this.signals.right = !this.signals.right; this.signals.left = false; }
+        }
+    }
+
+    handleTouch(e) {
+        e.preventDefault();
+        const baseRect = this.dom.joystickContainer.getBoundingClientRect();
+        const centerX = baseRect.left + baseRect.width / 2;
+        const centerY = baseRect.top + baseRect.height / 2;
+
+        if (e.type === 'touchstart') {
+            this.touch.active = true;
+        } else if (e.type === 'touchend' || e.type === 'touchcancel') {
+            this.touch.active = false;
+            this.touch.x = 0;
+            this.touch.y = 0;
+            this.dom.joystickStick.style.transform = `translate(0px, 0px)`;
+            return;
+        }
+
+        if (this.touch.active && e.touches.length > 0) {
+            const touch = e.touches[0];
+            let dx = touch.clientX - centerX;
+            let dy = touch.clientY - centerY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const maxDistance = baseRect.width / 2;
+
+            if (distance > maxDistance) {
+                dx = (dx / distance) * maxDistance;
+                dy = (dy / distance) * maxDistance;
+            }
+            
+            this.touch.x = dx / maxDistance;
+            this.touch.y = -dy / maxDistance; // Invert Y for forward/backward
+
+            const stickMaxTranslate = (baseRect.width - this.dom.joystickStick.clientWidth) / 2;
+            this.dom.joystickStick.style.transform = `translate(${this.touch.x * stickMaxTranslate}px, ${-this.touch.y * stickMaxTranslate}px)`;
+        }
+    }
+
+    resizeCanvas() { this.dom.particleCanvas.width = this.dom.container.clientWidth; this.dom.particleCanvas.height = this.dom.container.clientHeight; }
+
+    gameLoop() {
+        this.updatePhysics();
+        this.updateVisuals();
+        const uiData = this.getCarStateForUI();
+        this.session.handleData(this.car.speed, uiData);
+        this.loopId = requestAnimationFrame(this.gameLoop.bind(this));
+    }
+    
+    updatePhysics() {
+        const dt = 1 / 60;
+        
+        let targetThrottle = 0;
+        if (this.touch.active) {
+            targetThrottle = this.touch.y;
+        } else { // Fallback to keyboard
+            if (this.keys.w || this.keys.arrowup) targetThrottle = 1.0;
+            if (this.keys.s || this.keys.arrowdown) targetThrottle = -1.0;
+        }
+        this.car.throttle += (targetThrottle - this.car.throttle) * this.car.throttleRate;
+        
+        let targetSteer = 0;
+        if (this.touch.active) {
+            targetSteer = this.touch.x * this.car.maxSteerAngle;
+        } else { // Fallback to keyboard
+            if (this.keys.a || this.keys.arrowleft) targetSteer = -this.car.maxSteerAngle;
+            if (this.keys.d || this.keys.arrowright) targetSteer = this.car.maxSteerAngle;
+        }
+        this.car.steerAngle += (targetSteer - this.car.steerAngle) * this.car.steerSpeed;
+        if (targetSteer === 0 && !this.touch.active) this.car.steerAngle *= (1 - this.car.steerReturnRate);
+
+
+        const force = this.car.throttle * (this.car.throttle > 0 ? this.car.engineForce : this.car.brakeForce);
+        const drag = this.car.dragCoefficient * this.car.speed * Math.abs(this.car.speed);
+        const friction = this.car.frictionCoefficient * Math.sign(this.car.speed);
+        const acceleration = force - drag - friction;
+
+        this.camera.shake = Math.min(Math.abs(acceleration) / 50, 1.0) * 4;
+        this.car.speed += acceleration * dt;
+        this.car.speed = Math.max(-this.car.maxSpeed / 2, Math.min(this.car.maxSpeed, this.car.speed));
+        if (Math.abs(this.car.speed) < 0.01 && Math.abs(force) < 0.1) this.car.speed = 0;
+
+        if (Math.abs(this.car.speed) > 0.1) {
+            const angularVelocity = (this.car.speed / this.car.wheelbase) * Math.tan(this.car.steerAngle);
+            this.car.angle += angularVelocity * dt;
+        }
+
+        this.car.x += Math.sin(this.car.angle) * this.car.speed * dt * this.PIXELS_PER_METER;
+        this.car.y -= Math.cos(this.car.angle) * this.car.speed * dt * this.PIXELS_PER_METER;
+    }
+
+    updateVisuals() {
+        this.camera.shake *= 0.9;
+        const shakeX = (Math.random() - 0.5) * this.camera.shake;
+        const shakeY = (Math.random() - 0.5) * this.camera.shake;
+        this.dom.container.style.transform = `translate(${shakeX}px, ${shakeY}px)`;
+        
+        this.camera.x += (this.car.x - this.camera.x) * this.camera.smoothness;
+        this.camera.y += (this.car.y - this.camera.y) * this.camera.smoothness;
+        
+        const angleDeg = this.car.angle * (180 / Math.PI);
+        this.dom.car.style.transform = `translate(-50%, -50%) rotate(${angleDeg}deg)`;
+        this.dom.roadMarkings.style.backgroundPosition = `${-this.camera.x}px ${-this.camera.y}px`;
+
+        const isBraking = this.car.throttle < -0.1 && this.car.speed > 0.1;
+        this.dom.taillights.style.opacity = isBraking ? '1' : '0.7';
+        this.dom.highMountBrakeLight.style.backgroundColor = isBraking ? '#ff0000' : 'rgba(255, 0, 0, 0.2)';
+        
+        this.dom.signals.fl.classList.toggle('blinking', this.signals.left);
+        this.dom.signals.rl.classList.toggle('blinking', this.signals.left);
+        this.dom.signals.fr.classList.toggle('blinking', this.signals.right);
+        this.dom.signals.rr.classList.toggle('blinking', this.signals.right);
+
+        this.updateParticles();
+    }
+
+    updateParticles() {
+        const lateralSpeed = Math.abs(this.car.speed * Math.tan(this.car.steerAngle));
+        if (lateralSpeed > 3.5 && this.particles.length < 100) {
+            for (let i = 0; i < 2; i++) {
+                this.particles.push({
+                    x: this.dom.particleCanvas.width / 2 - Math.sin(this.car.angle) * 70,
+                    y: this.dom.particleCanvas.height / 2 + Math.cos(this.car.angle) * 70,
+                    vx: -Math.sin(this.car.angle) * this.car.speed/2 + (Math.random() - 0.5) * 2,
+                    vy: Math.cos(this.car.angle) * this.car.speed/2 + (Math.random() - 0.5) * 2,
+                    life: 1, size: Math.random() * 2 + 1
+                });
+            }
+        }
+        
+        this.pctx.clearRect(0, 0, this.dom.particleCanvas.width, this.dom.particleCanvas.height);
+        this.pctx.fillStyle = this.session.settings.isDark ? 'rgba(200,200,200,0.5)' : 'rgba(50,50,50,0.5)';
+        for (let i = this.particles.length - 1; i >= 0; i--) {
+            let p = this.particles[i]; p.life -= 0.02;
+            if (p.life <= 0) { this.particles.splice(i, 1); continue; }
+            p.x += p.vx; p.y += p.vy;
+            this.pctx.globalAlpha = p.life;
+            this.pctx.fillRect(p.x, p.y, p.size, p.size);
+        }
+        this.pctx.globalAlpha = 1;
+    }
+
+    getCarStateForUI() {
+        const lastV = this.session.lastVelocity || 0;
+        const acceleration = (this.car.speed - lastV) / (1 / 60);
+        const gForceLon = acceleration / this.GRAVITY;
+        const turningRadius = this.car.wheelbase / Math.tan(this.car.steerAngle);
+        const gForceLat = (Math.abs(this.car.speed) > 1 && Math.abs(this.car.steerAngle) > 0.01) ? (this.car.speed * this.car.speed) / turningRadius / this.GRAVITY : 0;
+        return {
+            throttle: this.car.throttle,
+            steeringAngle: this.car.steerAngle * (180 / Math.PI),
+            gForceLon, gForceLat,
+            gForceTotal: Math.sqrt(gForceLon ** 2 + gForceLat ** 2),
+        };
+    }
+}
+
+/**
+ * Handles Web Bluetooth API interactions.
+ */
+class BLEHandler {
+    constructor(callbacks) {
+        this.SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
+        this.CHAR_UUID = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
+        this.DEVICE_NAME = 'RC-Speed-Tracker';
+        this.MAX_ATTEMPTS = 3;
+        this.RETRY_DELAY = 2000;
+        this.device = null;
+        this.gattServer = null;
+        this.onData = callbacks.onData;
+        this.onStateChange = callbacks.onStateChange;
+        this.onDisconnect = this.onGattServerDisconnected.bind(this);
+    }
+
+    async connect() {
+        try {
+            this.onStateChange('connecting', 'Waiting for device...');
+            this.device = await navigator.bluetooth.requestDevice({
+                filters: [{ name: this.DEVICE_NAME }],
+                optionalServices: [this.SERVICE_UUID]
+            });
+            this.device.addEventListener('gattserverdisconnected', this.onDisconnect);
+        } catch (error) {
+            this.onStateChange('disconnected');
+            if (error.name !== 'NotFoundError') {
+                this.onStateChange('error', 'Bluetooth permission denied.');
+            }
+            return false;
+        }
+
+        for (let attempt = 1; attempt <= this.MAX_ATTEMPTS; attempt++) {
+            try {
+                const message = attempt > 1 ? `Retrying... (${attempt}/${this.MAX_ATTEMPTS})` : 'Connecting to device...';
+                this.onStateChange('connecting', message);
+                this.gattServer = await this.device.gatt.connect();
+                const service = await this.gattServer.getPrimaryService(this.SERVICE_UUID);
+                const characteristic = await service.getCharacteristic(this.CHAR_UUID);
+                await characteristic.startNotifications();
+                characteristic.addEventListener('characteristicvaluechanged', this.onData);
+                this.onStateChange('connected');
+                return true;
+            } catch (error) {
+                console.error(`Connection attempt ${attempt} failed:`, error);
+                if (this.gattServer && this.gattServer.connected) {
+                    this.gattServer.disconnect();
+                }
+                if (attempt < this.MAX_ATTEMPTS) {
+                    await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
+                }
+            }
+        }
+        
+        this.onStateChange('error', 'Connection failed after multiple attempts.');
+        this.device = null;
+        return false;
+    }
+
+    async disconnect() {
+        if (this.gattServer && this.gattServer.connected) {
+            this.gattServer.disconnect();
+        } else {
+             this.onStateChange('disconnected');
+        }
+    }
+
+    onGattServerDisconnected() {
+        if (!this.device) return;
+        this.device.removeEventListener('gattserverdisconnected', this.onDisconnect);
+        this.device = null;
+        this.gattServer = null;
+        this.onStateChange('disconnected', 'Device disconnected.');
+    }
+}
+
+/**
+ * Main application class.
+ */
+class TelemetryDashboard {
+    constructor() {
+        this.dom = {
+            // General
+            connectBtn: document.getElementById('connect-btn'), demoBtn: document.getElementById('demo-btn'), resetBtn: document.getElementById('reset-btn'),
+            lapBtn: document.getElementById('lap-btn'), saveBtn: document.getElementById('save-btn'), loadBtn: document.getElementById('load-btn'),
+            themeToggle: document.getElementById('theme-toggle'), helpBtn: document.getElementById('help-btn'),
+            unsupportedBrowser: document.getElementById('unsupported-browser'), loadingOverlay: document.getElementById('loading-overlay'),
+            loadingMessage: document.getElementById('loading-message'), toastContainer: document.getElementById('toast-container'),
+            connectionStatus: document.getElementById('connection-status'), unitSelector: document.getElementById('unit-selector'),
+            yearSpan: document.getElementById('year'),
+            // Modals
+            helpModal: document.getElementById('help-modal'), closeModalBtn: document.getElementById('close-modal-btn'),
+            sessionModal: document.getElementById('session-modal'), closeSessionModalBtn: document.getElementById('close-session-modal-btn'),
+            sessionModalTitle: document.getElementById('session-modal-title'), saveSessionView: document.getElementById('save-session-view'),
+            loadSessionView: document.getElementById('load-session-view'), sessionNameInput: document.getElementById('session-name-input'),
+            confirmSaveBtn: document.getElementById('confirm-save-btn'), savedSessionsList: document.getElementById('saved-sessions-list'),
+            // Stats
+            currentSpeed: document.getElementById('current-speed'), speedUnit: document.getElementById('speed-unit'),
+            maxVelocity: document.getElementById('max-velocity'), maxVelocityBox: document.getElementById('max-velocity-box'),
+            avgVelocity: document.getElementById('avg-velocity'), totalDistance: document.getElementById('total-distance'),
+            duration: document.getElementById('duration'), 
+            lapTimesContainer: document.getElementById('lap-times-container'), lapTimesList: document.getElementById('lap-times-list'),
+            // Gauges
+            gaugesContainer: document.getElementById('gauges-container'), throttleBar: document.getElementById('throttle-bar'),
+            brakeBar: document.getElementById('brake-bar'), throttleText: document.getElementById('throttle-text'),
+            steeringIndicator: document.getElementById('steering-indicator'), steeringText: document.getElementById('steering-text'),
+            gForceDot: document.getElementById('g-force-dot'), gForceMaxDot: document.getElementById('g-force-max-dot'), gForceText: document.getElementById('g-force-text'),
+            // Demo
+            demoGamePanel: document.getElementById('demo-game-panel'),
+            // Graphing
+            graphPanel: document.getElementById('graph-panel'), chartCanvas: document.getElementById('telemetryChart'), graphToggles: document.querySelectorAll('.graph-checkbox'),
+            fullscreenBtn: document.getElementById('fullscreen-btn'), fullscreenIconExpand: document.getElementById('fullscreen-icon-expand'),
+            fullscreenIconCompress: document.getElementById('fullscreen-icon-compress'),
+            toggleViewBtn: document.getElementById('toggle-view-btn'), iconFullView: document.getElementById('icon-full-view'), iconLiveView: document.getElementById('icon-live-view'),
+        };
+        this.settings = {
+            unit: 'metric_ms', isDark: true,
+            factors: { velocity: 1, distance: 1},
+            units: { velocity: 'm/s', distance: 'm' }
+        };
+        this.state = { connection: 'disconnected' };
+        
+        this.ui = new UI(this.dom);
+        this.chart = new ChartManager(this.dom.chartCanvas, this.settings);
+        this.session = new Session(this.ui, this.chart, this.settings);
+        this.demo = new DemoMode(this.session);
+        this.ble = new BLEHandler({
+            onData: this.session.handleBleData.bind(this.session),
+            onStateChange: this.handleConnectionStateChange.bind(this)
+        });
+
+        this.init();
+    }
+
+    init() {
+        this.dom.yearSpan.textContent = new Date().getFullYear();
+        if (!navigator.bluetooth) { 
+            this.dom.unsupportedBrowser.classList.remove('hidden'); 
+            this.dom.connectBtn.disabled = true;
+        }
+        this.applyTheme(localStorage.getItem('theme') !== 'light');
+        
+        this.dom.themeToggle.addEventListener('click', () => this.applyTheme(!this.settings.isDark));
+        this.dom.connectBtn.addEventListener('click', () => this.toggleConnection());
+        this.dom.demoBtn.addEventListener('click', () => this.toggleDemo());
+        this.dom.resetBtn.addEventListener('click', () => this.resetSession());
+        this.dom.lapBtn.addEventListener('click', () => this.session.markLap());
+        this.dom.unitSelector.addEventListener('change', (e) => this.changeUnits(e.target.value));
+        
+        this.dom.helpBtn.addEventListener('click', () => this.ui.toggleModal(this.dom.helpModal, true));
+        this.dom.closeModalBtn.addEventListener('click', () => this.ui.toggleModal(this.dom.helpModal, false));
+        
+        this.dom.saveBtn.addEventListener('click', () => this.showSaveView());
+        this.dom.loadBtn.addEventListener('click', () => this.showLoadView());
+        this.dom.closeSessionModalBtn.addEventListener('click', () => this.ui.toggleModal(this.dom.sessionModal, false));
+        this.dom.confirmSaveBtn.addEventListener('click', () => this.saveCurrentSession());
+
+        this.dom.graphToggles.forEach(toggle => {
+            toggle.addEventListener('change', (e) => this.chart.toggleDataset(e.target.dataset.index, e.target.checked));
+        });
+        document.getElementById('export-csv-btn').addEventListener('click', () => {
+            if (!this.chart.export('csv')) this.ui.showToast('No data to export', 'warn');
+            else this.ui.showToast('CSV Exported!', 'success');
+        });
+        document.getElementById('export-png-btn').addEventListener('click', () => {
+            if (!this.chart.export('png')) this.ui.showToast('No data to export', 'warn');
+            else this.ui.showToast('PNG Exported!', 'success');
+        });
+        this.dom.fullscreenBtn.addEventListener('click', () => this.toggleGraphFullscreen());
+        this.dom.toggleViewBtn.addEventListener('click', () => this.toggleGraphView());
+
+        this.resetSession(false);
+    }
+    
+    applyTheme(isDark) {
+        this.settings.isDark = isDark;
+        localStorage.setItem('theme', isDark ? 'dark' : 'light');
+        document.documentElement.classList.toggle('dark', isDark);
+        document.documentElement.classList.toggle('light', !isDark);
+        const sunIcon = `<svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg>`;
+        const moonIcon = `<svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>`;
+        this.dom.themeToggle.innerHTML = isDark ? sunIcon : moonIcon;
+        this.chart.updateTheme(isDark);
+    }
+
+    toggleGraphFullscreen() {
+        const panel = this.dom.graphPanel;
+        const isCurrentlyFullscreen = panel.classList.contains('is-fullscreen');
+        document.body.classList.toggle('graph-fullscreen-active', !isCurrentlyFullscreen);
+        panel.classList.toggle('is-fullscreen', !isCurrentlyFullscreen);
+        this.dom.fullscreenIconExpand.classList.toggle('hidden', !isCurrentlyFullscreen);
+        this.dom.fullscreenIconCompress.classList.toggle('hidden', isCurrentlyFullscreen);
+        setTimeout(() => this.chart.chart.resize(), 150);
+    }
+    
+    toggleGraphView() {
+        const isEnteringFullView = !this.chart.isFullView;
+        this.chart.setView(isEnteringFullView);
+        this.ui.updateGraphViewButton(isEnteringFullView, false);
+    }
+    
+    async toggleConnection() {
+        if (this.state.connection === 'connected') {
+            await this.ble.disconnect();
+            this.ui.updateGraphViewButton(true, false);
+        } else if (this.state.connection === 'disconnected') {
+            this.resetSession(false);
+            await this.ble.connect();
+        }
+    }
+    
+    toggleDemo() {
+        if (this.state.connection === 'demo') {
+            this.demo.stop();
+            this.state.connection = 'disconnected';
+            this.ui.updateConnectionStatus('disconnected');
+            this.ui.updateGraphViewButton(true, false);
+        } else if (this.state.connection === 'disconnected') {
+            this.resetSession(false);
+            this.demo.start();
+            this.state.connection = 'demo';
+            this.ui.updateConnectionStatus('demo');
+            this.ui.showToast('Demo Mode! Use joystick or WASD/Arrows.', 'info');
+        }
+    }
+    
+    resetSession(showToast = true) {
+        if (this.state.connection === 'demo') this.demo.stop();
+        if (this.state.connection === 'connected') this.ble.disconnect();
+        this.session.reset();
+        this.state.connection = 'disconnected';
+        this.ui.updateConnectionStatus('disconnected');
+        this.ui.updateStats({currentV:0, lastV:0, maxV:0,avgV:0,dist:0,duration:0}, this.settings);
+        if (showToast) this.ui.showToast('Session Reset', 'info');
+    }
+
+    handleConnectionStateChange(status, message = '') {
+        this.state.connection = (status === 'error') ? 'disconnected' : status;
+
+        if (status === 'connected') {
+            this.session.start();
+            this.ui.showToast('✅ Connected to RC Car!', 'success');
+        } else if (status === 'disconnected') {
+            this.session.stop();
+            if (message) this.ui.showToast(`🔌 ${message}`, 'warn');
+        } else if (status === 'error') {
+            this.session.stop();
+            if (message) this.ui.showToast(`❌ ${message}`, 'error');
+        }
+        this.ui.updateConnectionStatus(this.state.connection, message);
+    }
+
+    changeUnits(unit) {
+        this.settings.unit = unit;
+        const conversions = {
+            metric_ms: { v: 1, d: 1, vUnit: 'm/s', dUnit: 'm' },
+            metric_kmh: { v: 3.6, d: 0.001, vUnit: 'km/h', dUnit: 'km' },
+            imperial_mph: { v: 2.23694, d: 0.000621371, vUnit: 'mph', dUnit: 'mi' }
+        };
+        const c = conversions[unit];
+        this.settings.factors = { velocity: c.v, distance: c.d };
+        this.settings.units = { velocity: c.vUnit, distance: c.dUnit };
+        
+        ['maxVelocity', 'avgVelocity', 'totalDistance'].forEach(id => {
+            const el = this.dom[id];
+            if (el && (!el.nextSibling || el.nextSibling.nodeName !== 'SPAN')) {
+                const unitSpan = document.createElement('span');
+                unitSpan.className = 'text-sm text-slate-400 light:text-slate-500 ml-1';
+                el.parentNode.appendChild(unitSpan);
+            }
+        });
+        
+        this.ui.updateUnits(this.settings);
+        this.chart.updateUnits();
+        const dataLen = this.session.data.length;
+        const lastDataPoint = dataLen > 0 ? this.session.data[dataLen - 1] : { velocity: 0 };
+        const avgV = dataLen > 0 ? this.session.data.reduce((s, p) => s + p.velocity, 0) / dataLen : 0;
+        this.ui.updateStats({
+            currentV: lastDataPoint.velocity, lastV: this.session.lastVelocity,
+            maxV: this.session.maxVelocity, avgV: avgV, dist: this.session.totalDistance,
+            duration: this.session.startTime > 0 ? (Date.now() - this.session.startTime) / 1000 : 0
+        }, this.settings);
+    }
+
+    // --- Session Save/Load Logic ---
+    _getSavedSessions() { return JSON.parse(localStorage.getItem('rcTelemetrySessions_v2') || '[]'); }
+    _setSavedSessions(sessions) { localStorage.setItem('rcTelemetrySessions_v2', JSON.stringify(sessions)); }
+
+    showSaveView() {
+        this.dom.sessionModalTitle.textContent = 'Save Current Session';
+        this.dom.loadSessionView.classList.add('hidden');
+        this.dom.saveSessionView.classList.remove('hidden');
+        this.dom.sessionNameInput.value = `Session - ${new Date().toLocaleString()}`;
+        this.ui.toggleModal(this.dom.sessionModal, true);
+        this.dom.sessionNameInput.focus();
+    }
+
+    showLoadView() {
+        this.dom.sessionModalTitle.textContent = 'Load Saved Session';
+        this.dom.saveSessionView.classList.add('hidden');
+        this.dom.loadSessionView.classList.remove('hidden');
+        this.renderSessionsList();
+        this.ui.toggleModal(this.dom.sessionModal, true);
+    }
+
+    renderSessionsList() {
+        const sessions = this._getSavedSessions();
+        this.dom.savedSessionsList.innerHTML = '';
+        if (sessions.length === 0) {
+            this.dom.savedSessionsList.innerHTML = '<p class="text-center text-slate-500">No saved sessions found.</p>';
+            return;
+        }
+        sessions.sort((a, b) => b.id - a.id).forEach(s => {
+            const el = document.createElement('div');
+            el.className = 'glass-panel p-3 rounded-lg flex justify-between items-center';
+            el.innerHTML = `
+                <div>
+                    <p class="font-bold text-white light:text-black">${s.name}</p>
+                    <p class="text-xs text-slate-400">Saved on ${new Date(s.id).toLocaleDateString()}</p>
+                </div>
+                <div class="flex gap-2">
+                    <button data-id="${s.id}" class="load-session-btn text-sm bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-3 rounded-lg btn">📂 Load</button>
+                    <button data-id="${s.id}" class="delete-session-btn text-sm bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded-lg btn">🗑️</button>
+                </div>`;
+            this.dom.savedSessionsList.appendChild(el);
+        });
+        this.dom.savedSessionsList.querySelectorAll('.load-session-btn').forEach(btn => btn.addEventListener('click', (e) => this.loadSession(e.target.dataset.id)));
+        this.dom.savedSessionsList.querySelectorAll('.delete-session-btn').forEach(btn => btn.addEventListener('click', (e) => this.deleteSession(e.target.dataset.id)));
+    }
+
+    saveCurrentSession() {
+        const name = this.dom.sessionNameInput.value.trim();
+        if (!name) { this.ui.showToast('Please enter a session name.', 'warn'); return; }
+        if (!this.session.hasData) { this.ui.showToast('No data to save.', 'warn'); return; }
+
+        const sessions = this._getSavedSessions();
+        const duration = this.session.startTime > 0 ? (Date.now() - this.session.startTime) / 1000 : 0;
+        const newSession = {
+            id: Date.now(),
+            name: name,
+            summary: {
+                maxVelocity: this.session.maxVelocity,
+                totalDistance: this.session.totalDistance,
+                duration: duration,
+                lapTimes: this.session.lapTimes,
+            },
+            fullData: this.settings.fullSessionData,
+        };
+        sessions.push(newSession);
+        this._setSavedSessions(sessions);
+        this.ui.showToast('Session Saved!', 'success');
+        this.ui.toggleModal(this.dom.sessionModal, false);
+    }
+    
+    loadSession(id) {
+        const sessions = this._getSavedSessions();
+        const sessionToLoad = sessions.find(s => s.id == id);
+        if (!sessionToLoad) { this.ui.showToast('Session not found.', 'error'); return; }
+        
+        this.resetSession(false);
+        this.state.connection = 'reviewing';
+        this.ui.updateConnectionStatus('reviewing');
+
+        this.session.loadState(sessionToLoad);
+        this.chart.setView(true);
+        
+        this.ui.toggleModal(this.dom.sessionModal, false);
+        this.ui.showToast(`Loaded: ${sessionToLoad.name}`, 'info');
+    }
+
+    deleteSession(id) {
+        let sessions = this._getSavedSessions();
+        sessions = sessions.filter(s => s.id != id);
+        this._setSavedSessions(sessions);
+        this.renderSessionsList();
+        this.ui.showToast('Session Deleted', 'success');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => new TelemetryDashboard());
+</script>
+</body>
+</html>
